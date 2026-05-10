@@ -170,7 +170,7 @@ def render_daily_sales(df: pd.DataFrame):
         return
 
     # 解析出售日期为 date 类型
-    sold_df["出售日"] = pd.to_datetime(sold_df["出售日期"], format="%Y-%m-%d %H:%M", errors="coerce").dt.date
+    sold_df["出售日"] = pd.to_datetime(sold_df["出售日期"], format="%Y-%m-%d", errors="coerce").dt.date
     sold_df = sold_df.dropna(subset=["出售日"])
 
     if sold_df.empty:

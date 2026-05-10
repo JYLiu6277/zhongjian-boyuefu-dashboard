@@ -268,8 +268,8 @@ def merge_sale_date(new_df: pd.DataFrame, old_df: pd.DataFrame, timestamp: str) 
         old_sale_date = row.get("出售日期", "")
         old_lookup[key] = (old_status, old_sale_date if pd.notna(old_sale_date) else "")
 
-    # 格式化时间戳为可读日期
-    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+    # 格式化时间戳为可读日期（精确到天）
+    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d")
 
     newly_sold = 0
     returned = 0
@@ -387,7 +387,7 @@ def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str
 
     # 本次新增出售的房屋
     newly_sold = df[(df["出售日期"] != "") & (df["出售日期"].notna())]
-    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d")
     newly_sold_this_time = newly_sold[newly_sold["出售日期"] == sale_date_str]
 
     if not newly_sold_this_time.empty:
