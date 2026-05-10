@@ -150,6 +150,110 @@ def render_overview(df: pd.DataFrame, filtered_df: pd.DataFrame):
         col5.metric("📊 去化率", f"{sold_rate:.1f}%")
 
 
+# ─────────────────────────── 每日销量统计 ───────────────────────────
+
+
+def render_daily_sales(df: pd.DataFrame):
+    """渲染每日售出房屋数量统计模块：当日销量卡片 + 日期范围折线图"""
+    st.markdown("---")
+    st.subheader("📈 每日销量统计")
+
+    # 提取有出售日期的记录
+    if "出售日期" not in df.columns:
+        st.info("当前数据不包含出售日期信息，请使用最新版 scraper.py 抓取数据。")
+        return
+
+    sold_df = df[(df["出售日期"].str.len() > 0) & (df["出售日期"] != "未知")].copy()
+
+    if sold_df.empty:
+        st.info("暂无出售日期记录。首次抓取的已售房屋无法追溯出售日期，后续抓取中新增出售的房屋将自动记录。")
+        return
+
+    # 解析出售日期为 date 类型
+    sold_df["出售日"] = pd.to_datetime(sold_df["出售日期"], format="%Y-%m-%d %H:%M", errors="coerce").dt.date
+    sold_df = sold_df.dropna(subset=["出售日"])
+
+    if sold_df.empty:
+        st.info("出售日期解析失败，暂无有效数据。")
+        return
+
+    # 按日聚合
+    daily_counts = sold_df.groupby("出售日").size().reset_index(name="售出数量")
+    daily_counts = daily_counts.sort_values("出售日")
+
+    # ── 当日销量卡片 ──
+    today = pd.Timestamp.now().date()
+    today_count = int(daily_counts.loc[daily_counts["出售日"] == today, "售出数量"].sum())
+    total_tracked = int(daily_counts["售出数量"].sum())
+    avg_daily = total_tracked / len(daily_counts) if len(daily_counts) > 0 else 0
+
+    card_col1, card_col2, card_col3 = st.columns(3)
+    card_col1.metric("📅 今日售出", f"{today_count} 间")
+    card_col2.metric("📊 日均售出", f"{avg_daily:.1f} 间")
+    card_col3.metric("🔢 累计追踪售出", f"{total_tracked} 间")
+
+    # ── 日期范围选择 + 折线图 ──
+    min_date = daily_counts["出售日"].min()
+    max_date = daily_counts["出售日"].max()
+
+    date_col1, date_col2 = st.columns(2)
+    with date_col1:
+        start_date = st.date_input("起始日期", value=min_date, min_value=min_date, max_value=max_date, key="sales_start")
+    with date_col2:
+        end_date = st.date_input("截止日期", value=max_date, min_value=min_date, max_value=max_date, key="sales_end")
+
+    if start_date > end_date:
+        st.warning("起始日期不能晚于截止日期")
+        return
+
+    # 筛选日期范围
+    mask = (daily_counts["出售日"] >= start_date) & (daily_counts["出售日"] <= end_date)
+    range_data = daily_counts[mask].copy()
+
+    if range_data.empty:
+        st.info("所选日期范围内无销售记录。")
+        return
+
+    # 补全日期范围内的空缺日（销量为 0）
+    full_dates = pd.date_range(start=start_date, end=end_date, freq="D")
+    full_df = pd.DataFrame({"出售日": full_dates.date})
+    range_data = full_df.merge(range_data, on="出售日", how="left").fillna(0)
+    range_data["售出数量"] = range_data["售出数量"].astype(int)
+    range_data["出售日期"] = pd.to_datetime(range_data["出售日"])
+
+    fig = px.line(
+        range_data,
+        x="出售日期",
+        y="售出数量",
+        markers=True,
+        labels={"出售日期": "日期", "售出数量": "售出数量（间）"},
+    )
+    fig.update_traces(
+        line=dict(color="#F44336", width=2),
+        marker=dict(size=6),
+    )
+    fig.update_layout(
+        xaxis_title="",
+        yaxis_title="售出数量（间）",
+        yaxis=dict(dtick=1),
+        height=350,
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 该日期范围内的售出明细（可展开查看）
+    range_sold = sold_df[(sold_df["出售日"] >= start_date) & (sold_df["出售日"] <= end_date)]
+    if not range_sold.empty:
+        with st.expander(f"📋 查看所选范围内售出明细（共 {len(range_sold)} 间）"):
+            detail_cols = ["出售日期", "楼栋", "单元", "门牌号", "户型", "面积", "预售申报价"]
+            detail_cols = [c for c in detail_cols if c in range_sold.columns]
+            st.dataframe(
+                range_sold[detail_cols].sort_values("出售日期", ascending=False).reset_index(drop=True),
+                use_container_width=True,
+                height=300,
+            )
+
+
 # ─────────────────────────── 图表区域 ───────────────────────────
 
 
@@ -351,6 +455,9 @@ def main():
 
     # 概览卡片
     render_overview(df, filtered_df)
+
+    # 每日销量统计（基于全量数据，不受侧边栏筛选影响）
+    render_daily_sales(df)
 
     # 图表区域
     render_charts(filtered_df)
