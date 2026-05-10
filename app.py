@@ -43,12 +43,17 @@ STATUS_COLORS = {
 def load_csv(filepath: str) -> pd.DataFrame:
     """读取 CSV 并返回 DataFrame"""
     df = pd.read_csv(filepath, dtype=str)
-    # 将面积转为数值（去掉 m² 后缀）
+    # 字符串列空值统一填充，避免后续排序/筛选报错
+    str_cols = ["预售证号", "楼栋", "单元", "楼层", "门牌号", "户型", "面积", "预售申报价", "销售状态"]
+    for col in str_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna("未知")
+    # 将面积转为数值（去掉 m² 后缀，空值安全处理）
     if "面积" in df.columns:
-        df["面积_数值"] = df["面积"].str.replace(r"[^\d.]", "", regex=True).astype(float)
-    # 将价格转为数值（去掉 元/㎡ 后缀）
+        df["面积_数值"] = pd.to_numeric(df["面积"].str.replace(r"[^\d.]", "", regex=True), errors="coerce")
+    # 将价格转为数值（去掉 元/㎡ 后缀，空值安全处理）
     if "预售申报价" in df.columns:
-        df["价格_数值"] = df["预售申报价"].str.replace(r"[^\d.]", "", regex=True).astype(float)
+        df["价格_数值"] = pd.to_numeric(df["预售申报价"].str.replace(r"[^\d.]", "", regex=True), errors="coerce")
     return df
 
 
@@ -82,8 +87,8 @@ def render_sidebar(df: pd.DataFrame) -> pd.DataFrame:
     statuses = sorted(df["销售状态"].unique())
     selected_statuses = st.sidebar.multiselect("销售状态", statuses, default=statuses)
 
-    # 户型筛选
-    house_types = sorted(df["户型"].unique())
+    # 户型筛选（fillna 避免 NaN 与 str 排序报错）
+    house_types = sorted(df["户型"].fillna("未知").unique())
     selected_types = st.sidebar.multiselect("户型", house_types, default=house_types)
 
     # 面积范围筛选
