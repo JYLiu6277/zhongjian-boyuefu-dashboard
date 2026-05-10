@@ -7,12 +7,17 @@
 功能：
   1. 从销售页面提取所有楼栋 + 单元信息（含 buildId）
   2. 逐个请求 foorinfo.html，解析每间房屋的销售数据
-  3. 输出为 CSV 文件（每行一间房屋）
-  4. 可选：通过 Server酱 推送微信通知
+  3. 与上一次数据对比，自动识别新增出售并记录出售日期
+  4. 输出累积主表 latest.csv + 带时间戳的快照归档
+  5. 可选：通过 Server酱 推送微信通知
 
 用法：
   python scraper.py              # 仅抓取，生成 CSV
   python scraper.py --notify     # 抓取 + 微信推送
+
+存储策略：
+  data/latest.csv                 — 累积主表（含出售日期，每次覆盖更新）
+  data/中建泊悦府_YYYYMMDD_HHMMSS.csv — 快照归档（每次新增一个）
 """
 
 import re
@@ -34,6 +39,7 @@ PERMIT_NOS = "GX2025015,GX2025014,GX2025010,GX2025009,GX2025005,GX2025007"
 # 数据输出目录
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
+LATEST_CSV = os.path.join(DATA_DIR, "latest.csv")
 # 请求间隔（秒）
 REQUEST_DELAY = 0.5
 # Server酱 SendKey 列表（支持多人推送）
@@ -41,6 +47,8 @@ SEND_KEYS = [
     "SCT346705T2dGgrU81uHeTm7uax6axPlcH",
     "SCT346726TZaVghkOeXpWrwZw83KKVlKpy",
 ]
+# 房屋唯一标识列（用于跨次对比）
+ROOM_KEY_COLS = ["楼栋", "单元", "门牌号"]
 # ─────────────────────────────────────────────────────────────────
 
 HEADERS = {
@@ -221,13 +229,85 @@ def parse_unit_rooms(permit_no: str, lou_dong: str, unit_id: str, build_id: str)
     return rooms
 
 
+# ─────────────────────────── 出售日期对比 ───────────────────────────
+
+
+def load_latest() -> pd.DataFrame:
+    """加载累积主表 latest.csv，不存在则返回空 DataFrame"""
+    if os.path.exists(LATEST_CSV):
+        df = pd.read_csv(LATEST_CSV, dtype=str)
+        print(f"[对比] 已加载上次数据：{len(df)} 条记录")
+        return df
+    print("[对比] 首次运行，无历史数据")
+    return pd.DataFrame()
+
+
+def merge_sale_date(new_df: pd.DataFrame, old_df: pd.DataFrame, timestamp: str) -> pd.DataFrame:
+    """
+    对比新旧数据，更新出售日期列。
+
+    规则：
+      - 旧状态 ≠ 已售 且 新状态 = 已售 → 出售日期 = 本次抓取时间
+      - 旧状态 = 已售 且 新状态 = 已售 → 保留旧的出售日期
+      - 旧状态 = 已售 且 新状态 ≠ 已售 → 清空出售日期（退房）
+      - 首次运行已为已售 → 出售日期留空（无法追溯）
+      - 本次数据中不存在的旧房屋 → 跳过（避免网络异常误判）
+    """
+    # 确保新数据有出售日期列
+    new_df["出售日期"] = ""
+
+    if old_df.empty:
+        print("[对比] 无历史数据，出售日期全部留空")
+        return new_df
+
+    # 构建旧数据的查找字典：key -> (旧状态, 旧出售日期)
+    old_lookup = {}
+    for _, row in old_df.iterrows():
+        key = tuple(row[col] for col in ROOM_KEY_COLS)
+        old_status = row.get("销售状态", "")
+        old_sale_date = row.get("出售日期", "")
+        old_lookup[key] = (old_status, old_sale_date if pd.notna(old_sale_date) else "")
+
+    # 格式化时间戳为可读日期
+    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+
+    newly_sold = 0
+    returned = 0
+
+    for idx, row in new_df.iterrows():
+        key = tuple(row[col] for col in ROOM_KEY_COLS)
+        new_status = row["销售状态"]
+
+        if key not in old_lookup:
+            # 新增房屋（之前不存在），无法对比
+            continue
+
+        old_status, old_sale_date = old_lookup[key]
+
+        if old_status != "已售" and new_status == "已售":
+            # 状态变为已售 → 记录出售日期
+            new_df.at[idx, "出售日期"] = sale_date_str
+            newly_sold += 1
+        elif old_status == "已售" and new_status == "已售":
+            # 持续已售 → 保留旧出售日期
+            new_df.at[idx, "出售日期"] = old_sale_date
+        elif old_status == "已售" and new_status != "已售":
+            # 退房 → 清空出售日期
+            new_df.at[idx, "出售日期"] = ""
+            returned += 1
+        # 其余情况（非已售 → 非已售）：出售日期保持空
+
+    print(f"[对比] 本次新增出售：{newly_sold} 间，退房：{returned} 间")
+    return new_df
+
+
 # ─────────────────────────── 主流程 ───────────────────────────
 
 
 def scrape() -> tuple:
     """
     执行完整抓取流程。
-    返回: (DataFrame, csv_path, timestamp)
+    返回: (DataFrame, snapshot_path, timestamp)
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     print("=" * 60)
@@ -273,21 +353,30 @@ def scrape() -> tuple:
     # Step 3: 构建 DataFrame 并排序
     df = pd.DataFrame(all_rows)
     if not df.empty:
-        # 提取楼栋数字用于排序
         df["_楼栋序号"] = df["楼栋"].str.extract(r"(\d+)").astype(int)
         df["_单元序号"] = df["单元"].str.extract(r"(\d+)").astype(int)
         df = df.sort_values(["_楼栋序号", "_单元序号", "楼层"]).drop(
             columns=["_楼栋序号", "_单元序号"]
         ).reset_index(drop=True)
 
-    # Step 4: 保存 CSV
-    os.makedirs(DATA_DIR, exist_ok=True)
-    csv_filename = f"中建泊悦府_{timestamp}.csv"
-    csv_path = os.path.join(DATA_DIR, csv_filename)
-    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    print(f"\n✅ CSV 已保存：{csv_path}")
+    # Step 4: 对比历史数据，更新出售日期
+    old_df = load_latest()
+    df = merge_sale_date(df, old_df, timestamp)
 
-    return df, csv_path, timestamp
+    # Step 5: 保存文件
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # 5a: 覆盖更新累积主表
+    df.to_csv(LATEST_CSV, index=False, encoding="utf-8-sig")
+    print(f"\n✅ 累积主表已更新：{LATEST_CSV}")
+
+    # 5b: 快照归档
+    snapshot_filename = f"中建泊悦府_{timestamp}.csv"
+    snapshot_path = os.path.join(DATA_DIR, snapshot_filename)
+    df.to_csv(snapshot_path, index=False, encoding="utf-8-sig")
+    print(f"✅ 快照已归档：{snapshot_path}")
+
+    return df, snapshot_path, timestamp
 
 
 def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str:
@@ -295,6 +384,20 @@ def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str
     total = len(df)
     status_count = df["销售状态"].value_counts().to_dict()
     status_lines = "\n".join(f"- **{s}**：{c} 间" for s, c in sorted(status_count.items()))
+
+    # 本次新增出售的房屋
+    newly_sold = df[(df["出售日期"] != "") & (df["出售日期"].notna())]
+    sale_date_str = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+    newly_sold_this_time = newly_sold[newly_sold["出售日期"] == sale_date_str]
+
+    if not newly_sold_this_time.empty:
+        sold_lines = "\n".join(
+            f"- {r['楼栋']} {r['单元']} {r['门牌号']}（{r['户型']}，{r['面积']}）"
+            for _, r in newly_sold_this_time.iterrows()
+        )
+        sold_section = f"\n\n**本次新增出售 {len(newly_sold_this_time)} 间**\n{sold_lines}"
+    else:
+        sold_section = "\n\n**本次无新增出售**"
 
     # 逐栋楼构建明细表格
     building_sections = []
@@ -334,6 +437,7 @@ def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str
             "**全盘销售状态汇总**",
             status_lines,
         ]),
+        sold_section,
         *building_sections,
     ])
     return content
@@ -354,6 +458,12 @@ def main():
     print("\n─── 销售状态统计 ───")
     for status, cnt in sorted(df["销售状态"].value_counts().items()):
         print(f"  {status}: {cnt} 间")
+
+    # 出售日期统计
+    has_date = df[df["出售日期"].str.len() > 0]
+    print(f"\n─── 出售日期统计 ───")
+    print(f"  有出售日期记录：{len(has_date)} 间")
+    print(f"  无出售日期（含监控前已售）：{len(df[df['销售状态'] == '已售']) - len(has_date)} 间")
 
     # 微信推送
     if args.notify:

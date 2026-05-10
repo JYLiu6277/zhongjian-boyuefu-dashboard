@@ -48,6 +48,9 @@ def load_csv(filepath: str) -> pd.DataFrame:
     for col in str_cols:
         if col in df.columns:
             df[col] = df[col].fillna("未知")
+    # 出售日期空值填为空字符串（而非"未知"）
+    if "出售日期" in df.columns:
+        df["出售日期"] = df["出售日期"].fillna("")
     # 将面积转为数值（去掉 m² 后缀，空值安全处理）
     if "面积" in df.columns:
         df["面积_数值"] = pd.to_numeric(df["面积"].str.replace(r"[^\d.]", "", regex=True), errors="coerce")
@@ -58,11 +61,15 @@ def load_csv(filepath: str) -> pd.DataFrame:
 
 
 def get_csv_files() -> list:
-    """获取 data/ 目录下所有 CSV 文件，按修改时间倒序"""
+    """获取 data/ 目录下所有 CSV 文件，按修改时间倒序。latest.csv 始终排在最前面"""
     pattern = os.path.join(DATA_DIR, "*.csv")
     files = glob.glob(pattern)
-    files.sort(key=os.path.getmtime, reverse=True)
-    return files
+    latest = os.path.join(DATA_DIR, "latest.csv")
+    # latest.csv 排最前，其余按修改时间倒序
+    other_files = sorted([f for f in files if f != latest], key=os.path.getmtime, reverse=True)
+    if os.path.exists(latest):
+        return [latest] + other_files
+    return other_files
 
 
 # ─────────────────────────── 侧边栏 ───────────────────────────
@@ -251,9 +258,12 @@ def render_sales_control_table(filtered_df: pd.DataFrame):
                 cell_items = []
                 for _, r in rooms.iterrows():
                     bg = bg_map.get(r["销售状态"], "#fff")
+                    sale_info = ""
+                    if "出售日期" in r and r["出售日期"] and str(r["出售日期"]) not in ("", "未知", "nan"):
+                        sale_info = f"<br><small style='color:#666;'>{r['出售日期']}</small>"
                     cell_items.append(
                         f"<div style='background:{bg}; border-radius:4px; padding:2px 4px; margin:1px;'>"
-                        f"{r['门牌号']}<br><small>{r['销售状态']}</small></div>"
+                        f"{r['门牌号']}<br><small>{r['销售状态']}</small>{sale_info}</div>"
                     )
                 html_parts.append(f"<td style='border:1px solid #ccc; padding:2px;'>{''.join(cell_items)}</td>")
         html_parts.append("</tr>")
@@ -281,18 +291,23 @@ def render_data_table(filtered_df: pd.DataFrame):
         return
 
     # 展示列（去掉辅助列）
-    display_cols = ["预售证号", "楼栋", "单元", "楼层", "门牌号", "户型", "面积", "预售申报价", "销售状态"]
+    display_cols = ["预售证号", "楼栋", "单元", "楼层", "门牌号", "户型", "面积", "预售申报价", "销售状态", "出售日期"]
+    display_cols = [c for c in display_cols if c in filtered_df.columns]
     display_df = filtered_df[display_cols].reset_index(drop=True)
+
+    col_config = {
+        "销售状态": st.column_config.TextColumn("销售状态", width="small"),
+        "面积": st.column_config.TextColumn("面积", width="small"),
+        "预售申报价": st.column_config.TextColumn("预售申报价", width="medium"),
+    }
+    if "出售日期" in display_df.columns:
+        col_config["出售日期"] = st.column_config.TextColumn("出售日期", width="medium")
 
     st.dataframe(
         display_df,
         use_container_width=True,
         height=500,
-        column_config={
-            "销售状态": st.column_config.TextColumn("销售状态", width="small"),
-            "面积": st.column_config.TextColumn("面积", width="small"),
-            "预售申报价": st.column_config.TextColumn("预售申报价", width="medium"),
-        },
+        column_config=col_config,
     )
 
     # 下载按钮
