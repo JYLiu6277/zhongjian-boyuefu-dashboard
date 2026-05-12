@@ -9,6 +9,7 @@ Streamlit 应用主程序
 """
 
 import os
+import re
 import glob
 
 import streamlit as st
@@ -60,13 +61,24 @@ def load_csv(filepath: str) -> pd.DataFrame:
     return df
 
 
+def _extract_date_from_filename(filepath: str) -> str:
+    """从文件名中提取日期时间字符串（如 '20260510_145756'），用于排序。无法提取时返回空字符串（排到最后）"""
+    basename = os.path.basename(filepath)
+    m = re.search(r"(\d{8}_\d{6})", basename)
+    return m.group(1) if m else ""
+
+
 def get_csv_files() -> list:
-    """获取 data/ 目录下所有 CSV 文件，按修改时间倒序。latest.csv 始终排在最前面"""
+    """获取 data/ 目录下所有 CSV 文件，按文件名中的日期降序排列。latest.csv 始终排在最前面"""
     pattern = os.path.join(DATA_DIR, "*.csv")
     files = glob.glob(pattern)
     latest = os.path.join(DATA_DIR, "latest.csv")
-    # latest.csv 排最前，其余按修改时间倒序
-    other_files = sorted([f for f in files if f != latest], key=os.path.getmtime, reverse=True)
+    # latest.csv 排最前，其余按文件名中的日期降序排列
+    other_files = sorted(
+        [f for f in files if f != latest],
+        key=_extract_date_from_filename,
+        reverse=True,
+    )
     if os.path.exists(latest):
         return [latest] + other_files
     return other_files
