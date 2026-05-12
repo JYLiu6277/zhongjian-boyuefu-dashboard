@@ -24,5 +24,5 @@ Thumbs.db
 .streamlit/
 
 # 数据文件（保留目录结构，不提交具体数据）
-data/*.csv
+# data/*.csv
 !data/.gitkeep
