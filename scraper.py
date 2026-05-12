@@ -45,7 +45,7 @@ REQUEST_DELAY = 0.5
 # Server酱 SendKey 列表（支持多人推送）
 SEND_KEYS = [
     "SCT346705T2dGgrU81uHeTm7uax6axPlcH",
-    "SCT346726TZaVghkOeXpWrwZw83KKVlKpy",
+    # "SCT346726TZaVghkOeXpWrwZw83KKVlKpy",
 ]
 # 房屋唯一标识列（用于跨次对比）
 ROOM_KEY_COLS = ["楼栋", "单元", "门牌号"]
@@ -380,7 +380,7 @@ def scrape() -> tuple:
 
 
 def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str:
-    """根据 DataFrame 构建微信推送的 Markdown 内容"""
+    """根据 DataFrame 构建微信推送的 Markdown 内容（仅全盘汇总 + 网页链接）"""
     total = len(df)
     status_count = df["销售状态"].value_counts().to_dict()
     status_lines = "\n".join(f"- **{s}**：{c} 间" for s, c in sorted(status_count.items()))
@@ -399,46 +399,17 @@ def build_notify_content(df: pd.DataFrame, csv_path: str, timestamp: str) -> str
     else:
         sold_section = "\n\n**本次无新增出售**"
 
-    # 逐栋楼构建明细表格
-    building_sections = []
-    for lou_dong, b_df in df.groupby("楼栋", sort=False):
-        b_status = b_df["销售状态"].value_counts().to_dict()
-        b_stat_str = "　".join(f"{s} {c} 间" for s, c in sorted(b_status.items()))
-
-        unit_ids = b_df["单元"].unique().tolist()
-        floors = b_df["楼层"].unique().tolist()
-
-        header = "| 楼层 | " + " | ".join(unit_ids) + " |"
-        sep = "| :--: | " + " | ".join(":--:" for _ in unit_ids) + " |"
-        rows = []
-        for floor in floors:
-            cells = []
-            for unit in unit_ids:
-                mask = (b_df["楼层"] == floor) & (b_df["单元"] == unit)
-                matched = b_df[mask]
-                if matched.empty:
-                    cells.append("—")
-                else:
-                    entries = [f"{r['门牌号']}({r['销售状态']})" for _, r in matched.iterrows()]
-                    cells.append("<br>".join(entries))
-            rows.append("| " + floor + " | " + " | ".join(cells) + " |")
-
-        table = "\n".join([header, sep, *rows])
-        section = f"### {lou_dong}　{b_stat_str}\n\n{table}"
-        building_sections.append(section)
-
     content = "\n\n".join([
         "\n".join([
             f"**楼盘**：{ESTATE_NAME}",
             f"**抓取时间**：{timestamp}",
             f"**房屋总数**：{total} 间",
-            f"**结果文件**：`{os.path.basename(csv_path)}`",
             "",
             "**全盘销售状态汇总**",
             status_lines,
         ]),
         sold_section,
-        *building_sections,
+        f"\n📊 **查看销售明细**：[泊悦府销售看板](https://boyuefu-dashboard.streamlit.app)",
     ])
     return content
 
