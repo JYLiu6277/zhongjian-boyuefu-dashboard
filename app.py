@@ -40,7 +40,7 @@ STATUS_COLORS = {
 # ─────────────────────────── 数据加载 ───────────────────────────
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_csv(filepath: str) -> pd.DataFrame:
     """读取 CSV 并返回 DataFrame"""
     df = pd.read_csv(filepath, dtype=str)

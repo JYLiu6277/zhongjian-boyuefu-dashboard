@@ -45,7 +45,7 @@ REQUEST_DELAY = 0.5
 # Server酱 SendKey 列表（支持多人推送）
 SEND_KEYS = [
     "SCT346705T2dGgrU81uHeTm7uax6axPlcH",
-    # "SCT346726TZaVghkOeXpWrwZw83KKVlKpy",
+    "SCT346726TZaVghkOeXpWrwZw83KKVlKpy",
 ]
 # 房屋唯一标识列（用于跨次对比）
 ROOM_KEY_COLS = ["楼栋", "单元", "门牌号"]
